@@ -3,7 +3,12 @@ name: build-cmux-intel
 # Build cmux v0.27.0 for Intel Macs running macOS 13 (Ventura).
 # v0.27.0 is the last release whose deployment target is macOS 13.0, so it does
 # NOT depend on the macOS 14 Swift Observation runtime (libswiftObservation.dylib).
-# Two runners are tried; use whichever artifact succeeds.
+#
+# We run on an arm64 runner (macos-14, fast to allocate) and CROSS-COMPILE x86_64:
+#  - GhosttyKit is built with xcframework-target=native, but GhosttyXCFramework.zig
+#    is patched so the "native" slice targets x86_64 (not the arm64 host). This keeps
+#    the build macOS-only (no iOS slice -> avoids the CoreVideo iOS compile error).
+#  - Xcode 15.x is selected to match v0.27.0 (Swift 5.9 / macOS 14 SDK).
 on:
   workflow_dispatch: {}
 
@@ -12,7 +17,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-13]   # Intel x86_64 runner: native build = x86_64 macOS slice
+        runner: [macos-14]   # arm64 runner (fast queue); we cross-compile x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -24,10 +29,9 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Select Xcode 15.x on Intel runner (needs Swift 5.9, macOS 14 SDK)
-        if: matrix.runner == 'macos-13'
+      - name: Select Xcode 15.x (Swift 5.9, macOS 14 SDK; matches v0.27.0)
         run: |
-          for x in 15.2 15.1 15.0.1 15.4 15.3; do
+          for x in 15.4 15.3 15.2 15.1 15.0.1; do
             if [ -d "/Applications/Xcode_$x.app" ]; then
               sudo xcode-select -s "/Applications/Xcode_$x.app"; echo "selected Xcode $x"; break
             fi
@@ -65,17 +69,22 @@ jobs:
           assert "content.pointerStyle" not in s, "macOS15 pointerStyle call still present"
           print("Backport.swift patched OK")
           PY
-          echo "--- remaining macOS 15 refs (should be only symbol-free #available early-returns) ---"
-          grep -rn "macOS 15" Sources || true
 
-      - name: Build GhosttyKit.xcframework (native = host macOS arch, x86_64 on Intel; no iOS)
+      - name: Patch GhosttyXCFramework.zig -> force x86_64 for the native slice
+        run: |
+          f=ghostty/src/build/GhosttyXCFramework.zig
+          perl -0777 -pi -e 's/genericMacOSTarget\(b, null\)/genericMacOSTarget(b, .x86_64)/' "$f"
+          echo "--- patched line ---"
+          grep -n "genericMacOSTarget(b, .x86_64)" "$f"
+
+      - name: Build GhosttyKit.xcframework (native slice forced to x86_64; no iOS)
         run: |
           cd ghostty
           zig build -Demit-xcframework=true -Dxcframework-target=native -Doptimize=ReleaseFast
           cd ..
           ln -sf ghostty/macos/GhosttyKit.xcframework GhosttyKit.xcframework
-          echo "--- xcframework slices ---"
-          ls ghostty/macos/GhosttyKit.xcframework
+          echo "--- xcframework contents ---"
+          ls -R ghostty/macos/GhosttyKit.xcframework | head -40
           find ghostty/macos/GhosttyKit.xcframework -name "*.a" -exec sh -c 'echo "{}: $(lipo -archs "{}" 2>/dev/null)"' \;
 
       - name: Build cmux.app (x86_64, deployment target 13.0, unsigned)
@@ -106,6 +115,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: cmux-intel-${{ matrix.runner }}
+          name: cmux-intel-x86_64
           path: cmux-intel-${{ matrix.runner }}.zip
           if-no-files-found: error
