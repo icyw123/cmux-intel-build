@@ -1,0 +1,110 @@
+name: build-cmux-intel
+
+# Build cmux v0.27.0 for Intel Macs running macOS 13 (Ventura).
+# v0.27.0 is the last release whose deployment target is macOS 13.0, so it does
+# NOT depend on the macOS 14 Swift Observation runtime (libswiftObservation.dylib).
+# Two runners are tried; use whichever artifact succeeds.
+on:
+  workflow_dispatch: {}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [macos-13, macos-14]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    steps:
+      - name: Checkout cmux@v0.27.0 (with submodules)
+        uses: actions/checkout@v4
+        with:
+          repository: manaflow-ai/cmux
+          ref: v0.27.0
+          submodules: recursive
+          fetch-depth: 1
+
+      - name: Select Xcode 15.x on Intel runner (needs Swift 5.9, macOS 14 SDK)
+        if: matrix.runner == 'macos-13'
+        run: |
+          for x in 15.2 15.1 15.0.1 15.4 15.3; do
+            if [ -d "/Applications/Xcode_$x.app" ]; then
+              sudo xcode-select -s "/Applications/Xcode_$x.app"; echo "selected Xcode $x"; break
+            fi
+          done
+
+      - name: Toolchain info
+        run: |
+          sw_vers; echo "host arch: $(uname -m)"; xcodebuild -version; swift --version
+
+      - name: Install Zig 0.15.2 (match runner arch)
+        run: |
+          A=$(uname -m); if [ "$A" = "arm64" ]; then Z=aarch64; else Z=x86_64; fi
+          curl -fL --retry 3 -o zig.tar.xz "https://ziglang.org/download/0.15.2/zig-${Z}-macos-0.15.2.tar.xz"
+          tar xf zig.tar.xz
+          echo "$PWD/zig-${Z}-macos-0.15.2" >> "$GITHUB_PATH"
+
+      - name: Verify zig
+        run: zig version
+
+      - name: Patch Backport.swift (remove macOS 15-only pointerStyle symbols)
+        run: |
+          python3 - <<'PY'
+          import re
+          p = "Sources/Backport.swift"
+          s = open(p).read()
+          # 1) Drop the macOS-15 pointerStyle() call (the symbol/type is absent from the macOS 14 SDK).
+          s = s.replace("content.pointerStyle(style?.official)", "content")
+          # 2) Remove the whole macOS-15 `official: PointerStyle` computed property block.
+          s = re.sub(
+              r"\n    #if canImport\(AppKit\)\n    @available\(macOS 15, \*\)\n    var official: PointerStyle \{.*?\n    #endif\n",
+              "\n", s, flags=re.S)
+          open(p, "w").write(s)
+          assert ".official" not in s, ".official still referenced"
+          assert "var official" not in s, "macOS15 official property still present"
+          assert "content.pointerStyle" not in s, "macOS15 pointerStyle call still present"
+          print("Backport.swift patched OK")
+          PY
+          echo "--- remaining macOS 15 refs (should be only symbol-free #available early-returns) ---"
+          grep -rn "macOS 15" Sources || true
+
+      - name: Build GhosttyKit.xcframework (universal -> includes x86_64 slice)
+        run: |
+          cd ghostty
+          zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
+          cd ..
+          ln -sf ghostty/macos/GhosttyKit.xcframework GhosttyKit.xcframework
+          echo "--- xcframework slices ---"
+          ls ghostty/macos/GhosttyKit.xcframework
+
+      - name: Build cmux.app (x86_64, deployment target 13.0, unsigned)
+        run: |
+          set -o pipefail
+          xcodebuild \
+            -project GhosttyTabs.xcodeproj \
+            -scheme cmux \
+            -configuration Release \
+            -destination 'generic/platform=macOS' \
+            -skipMacroValidation \
+            ARCHS=x86_64 ONLY_ACTIVE_ARCH=NO \
+            MACOSX_DEPLOYMENT_TARGET=13.0 \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build
+
+      - name: Package (ad-hoc sign + zip)
+        run: |
+          APP="$(find "$HOME/Library/Developer/Xcode/DerivedData" -path "*/Build/Products/Release/cmux.app" -print -quit)"
+          echo "Built app: $APP"
+          test -n "$APP"
+          codesign --force --deep --sign - "$APP"
+          echo "--- final binary verification ---"
+          lipo -archs "$APP/Contents/MacOS/cmux"
+          otool -l "$APP/Contents/MacOS/cmux" | grep -A3 LC_BUILD_VERSION | grep -E "minos|sdk" || true
+          ditto -c -k --keepParent "$APP" "cmux-intel-${{ matrix.runner }}.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cmux-intel-${{ matrix.runner }}
+          path: cmux-intel-${{ matrix.runner }}.zip
+          if-no-files-found: error
