@@ -8,7 +8,8 @@ name: build-cmux-intel
 #  - GhosttyKit is built with xcframework-target=native, but GhosttyXCFramework.zig
 #    is patched so the "native" slice targets x86_64 (not the arm64 host). This keeps
 #    the build macOS-only (no iOS slice -> avoids the CoreVideo iOS compile error).
-#  - Xcode 15.x is selected to match v0.27.0 (Swift 5.9 / macOS 14 SDK).
+#  - Xcode 16.x is used: this ghostty fork references kCVPixelFormatType_30RGB_r210,
+#    which only exists in the macOS 15 SDK. The cmux app still targets macOS 13.0.
 on:
   workflow_dispatch: {}
 
@@ -29,9 +30,9 @@ jobs:
           submodules: recursive
           fetch-depth: 1
 
-      - name: Select Xcode 15.x (Swift 5.9, macOS 14 SDK; matches v0.27.0)
+      - name: Select Xcode 16.x (macOS 15 SDK; ghostty needs kCVPixelFormatType_30RGB_r210)
         run: |
-          for x in 15.4 15.3 15.2 15.1 15.0.1; do
+          for x in 16.4 16.3 16.2 16.1 16.0; do
             if [ -d "/Applications/Xcode_$x.app" ]; then
               sudo xcode-select -s "/Applications/Xcode_$x.app"; echo "selected Xcode $x"; break
             fi
