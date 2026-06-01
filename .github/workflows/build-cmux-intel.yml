@@ -81,7 +81,9 @@ jobs:
       - name: Build GhosttyKit.xcframework (native slice forced to x86_64; no iOS)
         run: |
           cd ghostty
-          zig build -Demit-xcframework=true -Dxcframework-target=native -Doptimize=ReleaseFast
+          # -Demit-macos-app=false: only build the xcframework cmux needs; do NOT also build
+          # Ghostty's own .app (it fails under the macOS 15 SDK due to macOS 26 "Tahoe" code).
+          zig build -Demit-xcframework=true -Demit-macos-app=false -Dxcframework-target=native -Doptimize=ReleaseFast
           cd ..
           ln -sf ghostty/macos/GhosttyKit.xcframework GhosttyKit.xcframework
           echo "--- xcframework contents ---"
