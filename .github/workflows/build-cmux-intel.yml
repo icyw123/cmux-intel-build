@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [macos-13, macos-14]
+        runner: [macos-13]   # Intel x86_64 runner: native build = x86_64 macOS slice
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     steps:
@@ -68,14 +68,15 @@ jobs:
           echo "--- remaining macOS 15 refs (should be only symbol-free #available early-returns) ---"
           grep -rn "macOS 15" Sources || true
 
-      - name: Build GhosttyKit.xcframework (universal -> includes x86_64 slice)
+      - name: Build GhosttyKit.xcframework (native = host macOS arch, x86_64 on Intel; no iOS)
         run: |
           cd ghostty
-          zig build -Demit-xcframework=true -Dxcframework-target=universal -Doptimize=ReleaseFast
+          zig build -Demit-xcframework=true -Dxcframework-target=native -Doptimize=ReleaseFast
           cd ..
           ln -sf ghostty/macos/GhosttyKit.xcframework GhosttyKit.xcframework
           echo "--- xcframework slices ---"
           ls ghostty/macos/GhosttyKit.xcframework
+          find ghostty/macos/GhosttyKit.xcframework -name "*.a" -exec sh -c 'echo "{}: $(lipo -archs "{}" 2>/dev/null)"' \;
 
       - name: Build cmux.app (x86_64, deployment target 13.0, unsigned)
         run: |
