@@ -71,6 +71,21 @@ jobs:
           print("Backport.swift patched OK")
           PY
 
+      - name: Patch WindowDecorationsController.swift (fix macOS 13 traffic lights)
+        run: |
+          python3 - <<'PY'
+          p="Sources/WindowDecorationsController.swift"
+          s=open(p).read()
+          s=s.replace("    private var didStart = false", "    private var didStart = false\n    private var nudgedWindows = Set<ObjectIdentifier>()")
+          old="    func apply(to window: NSWindow) {\n        let shouldHideButtons = shouldHideTrafficLights(for: window)\n        hideStandardButtons(on: window, hidden: shouldHideButtons)\n    }"
+          new="    func apply(to window: NSWindow) {\n        let shouldHideButtons = shouldHideTrafficLights(for: window)\n        hideStandardButtons(on: window, hidden: shouldHideButtons)\n        if !shouldHideButtons { nudgeTrafficLightLayout(window) }\n    }\n\n    private func nudgeTrafficLightLayout(_ window: NSWindow) {\n        let id = ObjectIdentifier(window)\n        guard !nudgedWindows.contains(id) else { return }\n        nudgedWindows.insert(id)\n        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {\n            window.standardWindowButton(.closeButton)?.isHidden = false\n            window.standardWindowButton(.miniaturizeButton)?.isHidden = false\n            window.standardWindowButton(.zoomButton)?.isHidden = false\n            if let toolbar = window.toolbar {\n                toolbar.isVisible = false\n                toolbar.isVisible = true\n            }\n            let frame = window.frame\n            window.setFrame(frame.insetBy(dx: 0, dy: -1), display: false)\n            window.setFrame(frame, display: true)\n        }\n    }"
+          assert old in s, "apply() not found"
+          s=s.replace(old,new)
+          open(p,"w").write(s)
+          assert "nudgeTrafficLightLayout" in s
+          print("WindowDecorationsController patched")
+          PY
+
       - name: Patch GhosttyXCFramework.zig -> force x86_64 for the native slice
         run: |
           f=ghostty/src/build/GhosttyXCFramework.zig
